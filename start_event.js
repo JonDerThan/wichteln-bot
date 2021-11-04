@@ -1,6 +1,8 @@
 const getOriginalMessage = require('./get_original_message.js');
 const getParticipants = require('./get_participants.js');
 const excludePairs = require('./exclude_pairs.json');
+const { createPairs } = require('./create_pairs.js');
+
 const { MessageActionRow, MessageButton, MessageEmbed } = require('discord.js');
 
 // got this from stackoverflow
@@ -23,7 +25,7 @@ module.exports = async function(interaction) {
 
     const promise = interaction.guild.members.fetch({ user: participants });
 
-    const pairs = createPairs(participants);
+    const pairs = createPairs(participants, excludePairs);
 
     const members = await promise;
 
@@ -41,12 +43,12 @@ module.exports = async function(interaction) {
         embeds: [ new MessageEmbed().addField('Pairs', pairsToString(pairs, members)) ],
     });
 
-    let messagesToBeSent = await sendDirectMessages(pairs, members);
+    const messagesToBeSent = await sendDirectMessages(pairs, members);
 
     await interaction.editReply({ content: 'Done!' });
 
     if (messagesToBeSent.length > 0) {
-        let ids = messagesToBeSent.map(elem => elem[0].id);
+        const ids = messagesToBeSent.map(elem => elem[0].id);
 
         const row = new MessageActionRow()
             .addComponents(
@@ -68,112 +70,44 @@ module.exports = async function(interaction) {
                 },
             });
 
-            collector.on('collect', async (tryAgainInteraction) => {
-                const [ member, messageContent ] = messagesToBeSent.find(elem => elem[0].id === tryAgainInteraction.user.id);
-
-                member.send(messageContent).catch(async () => {
-                    await tryAgainInteraction.reply({
-                        content: messageContent,
-                        ephemeral: true,
-                    });
-                }).finally(async () => {
-                    ids = ids.filter(id => id !== member.id);
-                    messagesToBeSent = messagesToBeSent.filter(([ member2 ]) => member.id !== member2.id);
-
-                    if (messagesToBeSent.length !== ids.length) throw 'What? 1';
-
-                    if (ids.length < 1) {
-                        await message.edit({
-                            content: 'Sent all messages!',
-                            embeds: [],
-                            components: [],
-                        });
-                    }
-
-                    else {
-                        const embeds = [new MessageEmbed().setDescription(messagesToBeSent.map(([ member2 ]) => `**${member2.user.tag}**`).join('\n'))];
-
-                        await message.edit({
-                            embeds,
-                        });
-                    }
-                });
-            });
+            collectTryAgain(collector, ids, messagesToBeSent, message);
         });
     }
 };
 
-function createPairs(participants) {
-    const pairs = [];
+// I'm sure there is a better way to do this, sorry
+function collectTryAgain(collector, ids, messagesToBeSent, message) {
+    collector.on('collect', tryAgainInteraction => {
+        const [ member, messageContent ] = messagesToBeSent.find(elem => elem[0].id === tryAgainInteraction.user.id);
 
-    // clone participants into new array
-    let receivers = participants.map(x => x);
+        member.send(messageContent).catch(async () => {
+            await tryAgainInteraction.reply({
+                content: messageContent,
+                ephemeral: true,
+            });
+        }).finally(async () => {
+            ids = ids.filter(id => id !== member.id);
+            messagesToBeSent = messagesToBeSent.filter(([ member2 ]) => member.id !== member2.id);
 
-    participants.forEach(participant => {
-        const possibleReceivers = receivers.filter(receiver => isValidPair(participant, receiver));
+            if (messagesToBeSent.length !== ids.length) throw 'What? 1';
 
-        // repeat the method if there aren't any valid pairs left
-        if (possibleReceivers.length < 1) return createPairs(participants);
-        const receiver = possibleReceivers[Math.floor(Math.random() * possibleReceivers.length)];
+            if (ids.length < 1) {
+                await message.edit({
+                    content: 'Sent all messages!',
+                    embeds: [],
+                    components: [],
+                });
+            }
 
-        pairs.push([participant, receiver]);
+            else {
+                const embeds = [new MessageEmbed().setDescription(messagesToBeSent.map(([ member2 ]) => `**${member2.user.tag}**`).join('\n'))];
 
-        receivers = receivers.filter(elem => elem !== receiver);
-    });
-
-    if (receivers.length > 0 || !checkIfValidPairs(participants, pairs)) throw 'What? qwer';
-
-    return pairs;
-}
-
-function isValidPair(user1, user2) {
-    let error = false;
-    if (user1 === user2) return false;
-
-    excludePairs.forEach(pair => {
-        if (pair.includes(user1) && pair.includes(user2)) {
-            error = true;
-            return false;
-        }
-    });
-    if (error) return false;
-
-    return true;
-}
-
-// Just to make sure everyone is included
-function checkIfValidPairs(participants, pairs) {
-    let error = false;
-    if (participants.length !== pairs.length) return;
-    const list1 = pairs.map(pair => pair[0]);
-    const list2 = pairs.map(pair => pair[1]);
-
-    participants.forEach(participant => {
-        // check if user receives and gives exactly one present
-        if (list1.filter(user => user === participant).length !== 1 || list2.filter(user => user === participant).length !== 1) {
-            error = true;
-            return false;
-        }
-    });
-    if (error) return false;
-
-    pairs.forEach((pair) => {
-        if (pair[0] === pair[1]) {
-            error = true;
-            return false;
-        }
-
-        excludePairs.forEach(excludePair => {
-            if (excludePair.includes(pair[0]) && excludePair.includes(pair[1])) {
-                error = true;
-                return false;
+                await message.edit({
+                    embeds,
+                });
             }
         });
-        if (error) return false;
     });
-    if (error) return false;
-
-    return true;
 }
 
 function pairsToString(pairs, members) {
